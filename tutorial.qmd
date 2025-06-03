@@ -1,0 +1,407 @@
+---
+title: "A Primer on Flow Matching"
+format:
+  html:
+    code-fold: true
+    theme: cosmo
+jupyter: python3
+bibliography: references.bib
+csl: apa.csl
+nocite: |
+  @gagneux2025avisualdive
+  @mathieu2024flow
+  @tomczak2024flow
+---
+
+# Introduction
+> "Creating noise from data is easy; creating data from noise is generative modeling." [@songscore]
+
+This quote beautifully captures the essence of modern generative models, among them the image & video generation models that we all play with.
+
+In more technical terms, we are given:\
+- A dataset of samples $x_1, x_2, \ldots, x_n \in \mathbb{R}^d$ drawn from an unknown data distribution $q(x)$\
+- A simple prior distribution $p_0(x)$ (often Gaussian **noise**)
+
+and want to learn a mapping $T : \mathbb{R}^d \to \mathbb{R}^d$ that can generate new data points starting from the prior distribution, so that the generated samples $T(x_0)$ closely follow the true data distribution $q(x)$.
+There are many approaches to learn this mapping $T$, but in this post we will focus on **flow matching**, a recent generative modeling framework that is both simple and scalable. 
+
+In the past two years or so, there have been hundreds of papers proposing improvements to flow matching, but I will focus only on the original "basic" version of it. As I don't feel very confident in my math, I will
+try to avoid any complex proofs so please read the linked resources for more details.
+
+# Continuous Normalizing Flows
+Consider a time-dependent vector field (**velocity field**) $v : [0, 1] \times \mathbb{R}^d \to \mathbb{R}^d$ \ that smoothly evolves samples drawn from a source distribution $p_0(x)$. This velocity field induces a time-dependent mapping,
+called a **flow** $\phi: [0, 1] \times \mathbb{R}^d \to \mathbb{R}^d$, defined as the solution to the following **ordinary differential equation** (ODE):
+
+$$
+\begin{cases}
+  \dfrac{d \phi_t(x)}{dt} = v\bigl(t, \phi_t(x)\bigr), \\[6pt]
+  \phi_0(x) = x
+\end{cases}
+$$ {#eq-ode}
+
+
+Thus, we can transform samples from the source distribution $p_0(x)$ by integrating over time $t$:
+
+$$
+x_1 = \phi_1(x_0) = x_0 + \int_0^1 v(t, x_t) dt
+$$
+
+At the same time, the velocity field induces a **probability path** $p_t(x)$, defined by the [push-forward equation](https://en.wikipedia.org/wiki/Pushforward_measure):
+
+$$
+p_t(x) = \phi_t\# p_0
+$$ {#eq-pushforward}
+i.e., $x \sim p_0 \implies \phi_t(x) \sim p_t$. 
+
+The velocity field $v_t$ and the induced probability path $p_t$ are linked to each other by the [continuity equation](https://en.wikipedia.org/wiki/Continuity_equation):
+
+$$
+\frac{\partial p_t}{\partial t} + \nabla \cdot (p_t v_t) = 0
+$$ {#eq-continuity} 
+where $p_t v_t$ denotes the **probability flux** and $\nabla \cdot$ is the **divergence** operator (defined as $\nabla \cdot F = \sum_{i=1}^d \frac{\partial F_i}{\partial x_i}$ for a given vector field $F : \mathbb{R}^d \to \mathbb{R}^d$).
+
+::: {.callout-note collapse="true" title="ELI5: Continuity Equation"}
+The continuity equation has its roots in physics, with a notable application in fluid dynamics, where it describes
+the conservation of mass of a fluid flowing with a specific velocity. In simple terms, the equation expresses the
+conservation of a quantity, e.g. density of a fluid at a specific location changes only if there is a flow of fluid into
+or out of that location. Similarly, probability is a quantity that is not created or destroyed (always sums to 1), it just
+moves around guided by the velocity field $v_t$.
+:::
+
+@chen2018neural proposed to model such a velocity field $v_\theta$ with a neural network, where $\theta \in \mathbb{R}^p$ are the parameters of
+the network, and named the resulting flow models **continuous normalizing flows** (CNF).
+
+::: {.callout-tip collapse="true" title="For ML folks"}
+CNFs can be seen as an extension of traditional normalizing flows, moving from a sequence of discrete transformations to a single continuous transformation utilizing the instantaneous version of the change of variable formula through the continuity equation.
+:::
+
+The goal of CNFs is to learn a velocity field $v_\theta(t, x_t)$ such that the induced probability path $p_t(x)$ ends up matching the true data distribution $q(x)$ at time $t=1$. 
+CNFs achieve this by training the model with the maximum likelihood objective:
+$$
+\mathcal{L_\theta} = \mathbb{E}_{x \sim q} \left[ \log p_1(x) \right]
+$$ {#eq-mle}
+where we can derive the log-likelihood as:
+$$
+\log p_1(x_1) = \log p_0(x_0) - \int_0^1 (\nabla \cdot v_\theta)(x_t) dt
+$$ {#eq-log-likelihood}
+
+::: {.callout-note collapse="true" title="Proof"}
+From the continuity equation, we have:
+$$
+\frac{\partial p_t}{\partial t} + \nabla \cdot (p_t v_t) = 0 \tag{1}
+$$
+We can expand the divergence term using the product rule:
+$$
+\nabla \cdot (p_t v_t) = (\nabla p_t) \cdot v_t + p_t (\nabla \cdot v_t)
+$$
+Substituting this back into the continuity equation, we get:
+$$
+\frac{\partial p_t}{\partial t} = - (\nabla p_t) \cdot v_t - p_t (\nabla \cdot v_t)
+$$
+Using $\frac{\partial log f}{\partial t} = \frac{1}{f} \frac{\partial f}{\partial t}$, $\nabla(log f) = \frac{1}{f} \nabla f$, and dividing both sides by $p_t$, we get:
+$$
+\frac{\partial \log p_t}{\partial t} = - (\nabla \log p_t) \cdot v_t - (\nabla \cdot v_t)  \tag{2}
+$$
+Now consider the change in $\log p_t(x_t)$ along a trajectory $x_t$. We can calculate the total derivative using the chain rule:
+$$
+\frac{d}{dt} \log p_t(x_t) = \frac{\partial \log p_t(x_t)}{\partial t} + \nabla \log p_t(x_t) \cdot \frac{d x_t}{dt}
+$$
+Substituting (2) and the fact that $\frac{d x_t}{dt} = v_t(x_t)$, we get:
+$$
+\frac{d}{dt} \log p_t(x_t) = - (\nabla \log p_t(x_t)) \cdot v_t(x_t) - (\nabla \cdot v_t(x_t)) + (\nabla \log p_t(x_t)) \cdot v_t(x_t)
+$$
+$$
+\frac{d}{dt} \log p_t(x_t) = - (\nabla \cdot v_t(x_t)) \tag{3}
+$$
+
+Finally, integrating both sides from $t=0$ to $t=1$, we arrive at:
+$$
+\log p_1(x_1) = \log p_0(x_0) - \int_0^1 (\nabla \cdot v_t)(x_t) dt \tag{4}
+$$
+:::
+
+This is cool and all, but that pesky integral really limits the scalability of CNFs. Training a CNF requires simulating an expensive ODE at each time step,
+which becomes prohibitive for high-dimensional complex datasets. This is where flow matching comes into play as it allows us to learn such a velocity field
+in a simulation-free manner.
+
+# Flow Matching
+
+The idea of flow matching [@lipman2023flow;@liu2023flow;@albergo2023building] is really simple: instead of trying to maximize the likelihood of the data, we try to match the ground truth velocity field.
+Thus the training objective turns into a regression problem:
+$$
+\mathcal{L_{\text{FM}}}(\theta) = \mathbb{E}_{t \sim U[0, 1], x \sim p_t} \left[ \left\| v_\theta(t, x) - v(t, x) \right\|^2 \right]
+$$ {#eq-fm-loss}
+
+Due to the relationship between the velocity field and the probability path, we can see that minimizing the flow matching loss to zero leads to a perfect velocity field that at time $t=1$ induces a distribution $p_1(x)$ that matches the true data distribution $q(x)$. Getting rid of the simulation during training and arriving at a simple
+regression problem is honestly amazing, though not very useful yet. If we already knew the ground truth velocity field $v(t, x)$ and its corresponding probability path $p_t(x)$, we would not have to learn anything in the first place. 
+
+Furthermore, it is easy to see that for a given pair of source and target distributions $(p_0, p_1)$, there are infinitely
+many probability paths $p_t$ (and thus infinitely many velocity fields $v_t$) that can interpolate between the two.
+So the question arises: how do we design the velocity field / probability path that we want to match?
+
+I am using the concepts of velocity field and probability path interchangeably here, by which I mean they are linked
+together through the continuity equation @eq-continuity.
+
+# Conditional Flow Matching
+This is where the key idea of conditional flow matching comes into play. We start by choosing a conditioning variable $z$ (independent of $t$)
+and express the probability path as a mixture of conditional distributions:
+
+$$
+p_t(x) = \mathbb{E}_{z \sim p_{\text{cond}}} \left[ p_t(x|z) \right] = \int p_t(x|z) p_{\text{cond}}(z) dz
+$$ {#eq-marginal-path}
+where the conditional probability path $p_t(x|z)$ should be chosen so that the marginal path $p_t(x)$
+satisfies the boundary conditions at $t=0$ and $t=1$, i.e., $p_0$ matches the source noise distribution and $p_1$
+matches the target data distribution. <br>
+For a given conditional probability path $p_t(x|z)$ and its corresponding velocity field $v_t(x|z)$, we define the 
+conditional flow matching loss as:
+
+$$
+\mathcal{L_{\text{CFM}}}(\theta) = \mathbb{E}_{t \sim U[0, 1], z \sim p_{\text{cond}}, x \sim p_t(x|z)} \left[ \left\| v_\theta(t, x) - v(t, x, z) \right\|^2 \right]
+$$ {#eq-cfm-loss}
+
+I present here without proof the following result:
+
+::: {.callout-important}
+**Key Result:** Regressing against the ground truth marginal velocity field $v(t, x)$ is equivalent to regressing against the conditional velocity field $v(t, x, z)$, i.e., $\nabla_\theta \mathcal{L_{\text{CFM}}}(\theta) = \nabla_\theta \mathcal{L_{\text{FM}}}(\theta)$.
+:::
+
+What this means is that by optimizing the conditional flow matching objective @eq-cfm-loss, we arrive at the same solution
+as the flow matching objective @eq-fm-loss. Thus, we are able to learn the complex marginal velocity field $v(t, x)$
+only by having access to the simple conditional probability path $p_t(x|z)$ and velocity field $v_t(x|z)$.
+
+We now turn our focus to designing these simple objects $p_{\text{cond}}(z)$, $p_t(x|z)$, and $v_t(x|z)$. We explore one variant of many possible choices, namely straight paths from
+source to target samples.
+
+- Let the conditioning variable $z = (x_0, x_1) \sim p_0 \times q$ be an independent pair of source and target data.
+- We consider Gaussian conditional probability paths that interpolate in a straight line between the source and target samples:
+$$
+p_t(x|z:=(x_0, x_1)) = \mathcal{N}(x; tx_1 + (1-t)x_0, \sigma^2 I)
+$$
+In order to fulfill the boundary conditions, we set $\sigma = 0$, so the Gaussian distribution actually collapses to a [Dirac delta distribution](https://en.wikipedia.org/wiki/Dirac_delta_function).
+$$
+p_t(x|z:=(x_0, x_1)) = \delta_{tx_1 + (1-t)x_0}(x)
+$$ {#eq-conditional-path}
+- The conditional velocity field (shown without proof) that generates the above probability path is quite simply the difference between the source and target samples. This makes a lot of sense as we are just moving in a straight line from the source to the target sample.
+  $$
+  v_t(x|z:=(x_0, x_1)) = x_1 - x_0
+  $$ {#eq-conditional-velocity}
+
+We now have all the ingredients to train our desired CNF in a simple, scalable, simulation-free manner.
+
+**Training Algorithm:**
+
+1. Sample $t \sim U[0,1]$
+2. Sample $x_0 \sim p_0$, $x_1 \sim q$
+3. Sample $x \sim p_t(x|z:=(x_0, x_1)) \Rightarrow x = tx_1 + (1-t)x_0$
+4. Calculate $v_t(x | z) = x_1 - x_0$
+5. Calculate the loss $\mathcal{L_{\text{CFM}}}(\theta) = \left\| v_\theta(t, x) - (x_1 - x_0) \right\|^2$
+6. Update $\theta$ using gradient descent
+
+**Sampling Algorithm:**
+
+1. Sample $x_0 \sim p_0$
+2. Integrate with the learned velocity field, e.g. with the Euler method for a desired number of steps $K$
+$$
+x_{t+1} = x_t + \frac{1}{K} v_\theta(t, x_t)
+$$
+
+# Demo
+
+I show here a simple example of generating data from a target distribution composed of four 2D Gaussians, starting from a single Gaussian source. You can find the full code [here](https://github.com/orxh/fm_tutorial).
+@fig-fm-widget shows the conditional flow matching setup. 500 samples are drawn from the source and target distributions.
+These samples are paired randomly together and the straight line paths between them are visualized. This is exactly the training signal that we will use to learn the velocity field. The idea of CFM is that learning to flow in a straight line between two random points will lead to a good enough aggregated velocity field that can be used to generate new samples.
+
+```{python}
+#| label: fig-fm-widget
+#| fig-cap: "Conditional Flow Matching Setup"
+
+import numpy as np
+from utils import generate_flow_animation
+
+shared_config = {
+    'N_POINTS': 500,
+    'N_STEPS': 10,
+    'T_MAX': 1.0,
+    'DT': 1.0 / 10,
+    'INTERVAL_MS': 200,
+    'CONTOUR_LEVELS': 5,
+}
+
+source_cfg = {
+    "means": [np.array([0.0, 0.0])],
+    "covs":  [np.array([[0.5, 0.0],
+                      [0.0, 0.5]])],
+    "weights": [1.0],
+}
+
+ring = 4.0
+target_cfg = {
+    "means": [
+        np.array([ ring,  ring]),
+        np.array([-ring,  ring]),
+        np.array([-ring, -ring]),
+        np.array([ ring, -ring]),
+    ],
+    "covs": 4 * [np.array([[0.5, 0.0],
+                           [0.0, 0.5]])],
+    "weights": 4 * [0.25],
+}
+
+generate_flow_animation(source_cfg, target_cfg, shared_config)
+```
+
+We can train the desired flow model with a simple neural network as follows:
+
+```{python}
+#| label: fig-fm-training
+#| fig-cap: "Training Flow Matching Model"
+
+import numpy as np
+import torch
+import torch.nn as nn
+import utils
+import matplotlib.pyplot as plt
+
+BATCH_SIZE = 1024
+STEPS = 5_000
+HIDDEN = 64
+LEARNING_RATE = 1e-3
+
+DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+
+class Flow(nn.Module):
+    def __init__(self, x_dim: int = 2, h: int = 128):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(x_dim + 1, h),
+            nn.ELU(),
+            nn.Linear(h, h),
+            nn.ELU(),
+            nn.Linear(h, h),
+            nn.ELU(),
+            nn.Linear(h, x_dim),
+        )
+
+    def forward(self, t: torch.Tensor, x_t: torch.Tensor) -> torch.Tensor:
+        """Predict velocity field at (t, x_t)."""
+        h = torch.cat([x_t, t], dim=-1)
+        return self.net(h)
+
+    @torch.no_grad()
+    def sample_path(self, x_0: torch.Tensor, num_steps: int = 200) -> torch.Tensor:
+        """Return the entire path: (num_steps+1, B, 2)."""
+        x_t = x_0.clone()
+        path = [x_t.clone()]
+        ts = torch.linspace(0, 1, num_steps + 1, device=x_0.device)
+        dt = 1.0 / num_steps
+        for i in range(num_steps):
+            v = self.forward(ts[i : i + 1].repeat(x_t.size(0), 1), x_t)
+            x_t = x_t + dt * v
+            path.append(x_t.clone())
+        return torch.stack(path)
+
+    @torch.no_grad()
+    def sample(self, x_0: torch.Tensor, num_steps: int = 200) -> torch.Tensor:
+        return self.sample_path(x_0, num_steps)[-1]
+
+
+def make_batch(
+        batch_size: int,
+        means_source: list[np.ndarray],
+        covs_source: list[np.ndarray],
+        weights_source: list[float],
+        means_target: list[np.ndarray],
+        covs_target: list[np.ndarray],
+        weights_target: list[float]
+    ) -> tuple[torch.Tensor, ...]:
+    """Return tensors (t, x_t, dx_t)."""
+    source_np = utils.sample_gaussian_mixture(
+        batch_size, means_source, covs_source, weights_source
+    )
+    target_np = utils.sample_gaussian_mixture(
+        batch_size, means_target, covs_target, weights_target
+    )
+
+    source = torch.from_numpy(source_np).float().to(DEVICE)
+    target = torch.from_numpy(target_np).float().to(DEVICE)
+
+    t = torch.rand(batch_size, 1, device=DEVICE)
+    x_t = (1 - t) * source + t * target
+    dx_t = target - source
+    return t, x_t, dx_t
+
+
+def train(config: dict):
+    means_source = config.get("means_source")
+    covs_source = config.get("covs_source")
+    weights_source = config.get("weights_source", [1.0])
+    means_target = config.get("means_target")
+    covs_target = config.get("covs_target")
+    weights_target = config.get("weights_target", [1.0])
+
+    model = Flow(x_dim=2, h=HIDDEN).to(DEVICE)
+    optimiser = torch.optim.AdamW(
+        model.parameters(), lr=LEARNING_RATE
+    )
+
+    training_losses = []
+
+    for step in range(1, STEPS + 1):
+        t, x_t, dx_t = make_batch(
+            BATCH_SIZE,
+            means_source,
+            covs_source,
+            weights_source,
+            means_target,
+            covs_target,
+            weights_target
+        )
+
+        optimiser.zero_grad(set_to_none=True)
+        loss = torch.mean((model(t, x_t) - dx_t) ** 2)
+        loss.backward()
+        optimiser.step()
+
+        training_losses.append(loss.item())
+
+    return model.eval(), training_losses
+
+trained_flow, training_losses = train(
+    {
+        "means_source": source_cfg["means"],
+        "covs_source": source_cfg["covs"],
+        "weights_source": [1.0],
+        "means_target": target_cfg["means"],
+        "covs_target": target_cfg["covs"],
+        "weights_target": target_cfg["weights"],
+    }
+)
+
+plt.plot(training_losses)
+plt.xlabel("Step")
+plt.ylabel("Loss")
+plt.title("Training Loss Curve")
+plt.show()
+```
+
+Then we can visualize the learned velocity field and the generated trajectories from the trained flow matching model:
+
+```{python}
+#| label: fig-flow-animation
+#| fig-cap: "Learned Velocity Field"
+utils.animate_flow_with_arrows(trained_flow, source_cfg, num_samples=500, num_steps=100)
+```
+
+```{python}
+#| label: fig-flow-path
+#| fig-cap: "Generated Trajectories from the Trained Flow Matching Model"
+utils.visualize_flow_path(trained_flow, source_cfg, num_samples=500, num_steps=100)
+```
+
+From @fig-flow-animation and @fig-flow-path, we can see that the generated points follow closely the target distribution.
+We can also observe that the learned marginal velocity field does not always produce straight paths. This is a reasonable limitation of the original flow matching framework, as the learning signal comes only from random pairs of source and target samples. These random pairs produce crossing paths as in @fig-fm-widget, and you can think of the learned velocity field as the average direction of the paths crossing at a certain location. Several works [@liu2023flow;@pooladian2023multisample;@tongimproving] improve upon the original flow matching framework by learning straighter velocity fields, resulting in higher generation quality in fewer sampling steps.
+
+# Conclusion
+Flow matching offers a simple and intuitive way to learn generative models without needing to simulate expensive ODEs.
+By turning the problem into a simple conditional regression task, we are able to scale flow models to high-dimensional complex datasets. In a next post, I want to write about **discrete flow matching**, which forms the backbone of the recently hot diffusion language models.

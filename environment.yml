@@ -1,0 +1,16 @@
+name: fm-tutorial
+channels:
+  - pytorch
+  - nvidia
+  - defaults
+dependencies:
+  - python=3.12
+  - pip
+  - numpy
+  - scikit-learn
+  - scipy
+  - matplotlib
+  - pytorch=2.3.0
+  - pytorch-cuda=11.8
+  - ipykernel
+  - jupyter
