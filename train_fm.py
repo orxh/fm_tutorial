@@ -2,7 +2,6 @@ import numpy as np
 import torch
 import torch.nn as nn
 import utils
-import matplotlib.pyplot as plt
 
 BATCH_SIZE = 1024
 STEPS = 5_000
@@ -89,7 +88,7 @@ def train(config: dict):
 
     training_losses = []
 
-    for step in range(1, STEPS + 1):
+    for _ in range(STEPS):
         t, x_t, dx_t = make_batch(
             BATCH_SIZE,
             means_source,

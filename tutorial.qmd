@@ -22,11 +22,13 @@ In more technical terms, we are given:\
 - A dataset of samples $x_1, x_2, \ldots, x_n \in \mathbb{R}^d$ drawn from an unknown data distribution $q(x)$\
 - A simple prior distribution $p_0(x)$ (often Gaussian **noise**)
 
-and want to learn a mapping $T : \mathbb{R}^d \to \mathbb{R}^d$ that can generate new data points starting from the prior distribution, so that the generated samples $T(x_0)$ closely follow the true data distribution $q(x)$.
-There are many approaches to learn this mapping $T$, but in this post we will focus on **flow matching**, a recent generative modeling framework that is both simple and scalable. 
+and want to learn a mapping $T : \mathbb{R}^d \to \mathbb{R}^d$ that can generate new data points starting from the prior distribution so that
+the generated samples $T(x_0)$ closely follow the true data distribution $q(x)$.
+There are many approaches to learning this mapping $T$, but in this post, we will focus on **flow matching**, a recent generative modeling framework that is both simple and scalable. Flow matching has powered state-of-the-art generative models in a wide range of modalities, including
+images and videos [@esser2024scaling;@metamoviegen], speech [@liugenerative;@voicebox], audio & music [@prajwalmusicflow;@audiobox], and protein structures [@jingalphafold;@bosese].
 
-In the past two years or so, there have been hundreds of papers proposing improvements to flow matching, but I will focus only on the original "basic" version of it. As I don't feel very confident in my math, I will
-try to avoid any complex proofs so please read the linked resources for more details.
+In the past two years or so, hundreds of papers have proposed improvements to flow matching, but I will focus only on the original "basic" version of it. As I don't feel very confident in my math, I will
+try to avoid complex proofs, so please read the linked resources for more details.
 
 # Continuous Normalizing Flows
 Consider a time-dependent vector field (**velocity field**) $v : [0, 1] \times \mathbb{R}^d \to \mathbb{R}^d$ \ that smoothly evolves samples drawn from a source distribution $p_0(x)$. This velocity field induces a time-dependent mapping,
@@ -61,10 +63,10 @@ $$ {#eq-continuity}
 where $p_t v_t$ denotes the **probability flux** and $\nabla \cdot$ is the **divergence** operator (defined as $\nabla \cdot F = \sum_{i=1}^d \frac{\partial F_i}{\partial x_i}$ for a given vector field $F : \mathbb{R}^d \to \mathbb{R}^d$).
 
 ::: {.callout-note collapse="true" title="ELI5: Continuity Equation"}
-The continuity equation has its roots in physics, with a notable application in fluid dynamics, where it describes
+The continuity equation has its roots in physics with a notable application in fluid dynamics, where it describes
 the conservation of mass of a fluid flowing with a specific velocity. In simple terms, the equation expresses the
 conservation of a quantity, e.g. density of a fluid at a specific location changes only if there is a flow of fluid into
-or out of that location. Similarly, probability is a quantity that is not created or destroyed (always sums to 1), it just
+or out of that location. Similarly, probability is a quantity that is not created or destroyed (always sums to 1); it just
 moves around guided by the velocity field $v_t$.
 :::
 
@@ -121,13 +123,13 @@ $$
 :::
 
 This is cool and all, but that pesky integral really limits the scalability of CNFs. Training a CNF requires simulating an expensive ODE at each time step,
-which becomes prohibitive for high-dimensional complex datasets. This is where flow matching comes into play as it allows us to learn such a velocity field
+which becomes prohibitive for high-dimensional complex datasets. This is where flow matching comes into play, as it allows us to learn such a velocity field
 in a simulation-free manner.
 
 # Flow Matching
 
-The idea of flow matching [@lipman2023flow;@liu2023flow;@albergo2023building] is really simple: instead of trying to maximize the likelihood of the data, we try to match the ground truth velocity field.
-Thus the training objective turns into a regression problem:
+The idea of flow matching [@lipman2023flow;@liu2023flow;@albergo2023building] is really simple: instead of maximizing the likelihood of the data, we try to match the ground-truth velocity field.
+Thus, the training objective turns into a regression problem:
 $$
 \mathcal{L_{\text{FM}}}(\theta) = \mathbb{E}_{t \sim U[0, 1], x \sim p_t} \left[ \left\| v_\theta(t, x) - v(t, x) \right\|^2 \right]
 $$ {#eq-fm-loss}
@@ -137,7 +139,7 @@ regression problem is honestly amazing, though not very useful yet. If we alread
 
 Furthermore, it is easy to see that for a given pair of source and target distributions $(p_0, p_1)$, there are infinitely
 many probability paths $p_t$ (and thus infinitely many velocity fields $v_t$) that can interpolate between the two.
-So the question arises: how do we design the velocity field / probability path that we want to match?
+So, the question arises: how do we design the velocity field/probability path we want to match?
 
 I am using the concepts of velocity field and probability path interchangeably here, by which I mean they are linked
 together through the continuity equation @eq-continuity.
@@ -165,7 +167,7 @@ I present here without proof the following result:
 **Key Result:** Regressing against the ground truth marginal velocity field $v(t, x)$ is equivalent to regressing against the conditional velocity field $v(t, x, z)$, i.e., $\nabla_\theta \mathcal{L_{\text{CFM}}}(\theta) = \nabla_\theta \mathcal{L_{\text{FM}}}(\theta)$.
 :::
 
-What this means is that by optimizing the conditional flow matching objective @eq-cfm-loss, we arrive at the same solution
+This means that by optimizing the conditional flow matching objective @eq-cfm-loss, we arrive at the same solution
 as the flow matching objective @eq-fm-loss. Thus, we are able to learn the complex marginal velocity field $v(t, x)$
 only by having access to the simple conditional probability path $p_t(x|z)$ and velocity field $v_t(x|z)$.
 
@@ -177,11 +179,11 @@ source to target samples.
 $$
 p_t(x|z:=(x_0, x_1)) = \mathcal{N}(x; tx_1 + (1-t)x_0, \sigma^2 I)
 $$
-In order to fulfill the boundary conditions, we set $\sigma = 0$, so the Gaussian distribution actually collapses to a [Dirac delta distribution](https://en.wikipedia.org/wiki/Dirac_delta_function).
+In order to fulfill the boundary conditions, we set $\sigma = 0$, so the Gaussian distribution collapses to a [Dirac delta distribution](https://en.wikipedia.org/wiki/Dirac_delta_function).
 $$
 p_t(x|z:=(x_0, x_1)) = \delta_{tx_1 + (1-t)x_0}(x)
 $$ {#eq-conditional-path}
-- The conditional velocity field (shown without proof) that generates the above probability path is quite simply the difference between the source and target samples. This makes a lot of sense as we are just moving in a straight line from the source to the target sample.
+- The conditional velocity field (shown without proof) that generates the above probability path is quite simply the difference between the source and target samples. This makes a lot of sense, as we are just moving in a straight line from the source to the target sample.
   $$
   v_t(x|z:=(x_0, x_1)) = x_1 - x_0
   $$ {#eq-conditional-velocity}
@@ -207,9 +209,10 @@ $$
 
 # Demo
 
-I show here a simple example of generating data from a target distribution composed of four 2D Gaussians, starting from a single Gaussian source. You can find the full code [here](https://github.com/orxh/fm_tutorial).
-@fig-fm-widget shows the conditional flow matching setup. 500 samples are drawn from the source and target distributions.
-These samples are paired randomly together and the straight line paths between them are visualized. This is exactly the training signal that we will use to learn the velocity field. The idea of CFM is that learning to flow in a straight line between two random points will lead to a good enough aggregated velocity field that can be used to generate new samples.
+I show here a simple example of generating data from a target distribution composed of four 2D Gaussians, starting from a single Gaussian source. 
+You can find the full code [here](https://github.com/orxh/fm_tutorial).
+@fig-fm-widget shows the conditional flow matching setup, where 500 samples are drawn from the source and target distributions.
+These samples are paired randomly together, and the straight-line paths between them are visualized. This is exactly the training signal that we will use to learn the velocity field. The idea of CFM is that learning to flow in a straight line between two random points will lead to a good enough aggregated velocity field that can be used to generate new samples.
 
 ```{python}
 #| label: fig-fm-widget
@@ -399,9 +402,12 @@ utils.animate_flow_with_arrows(trained_flow, source_cfg, num_samples=500, num_st
 utils.visualize_flow_path(trained_flow, source_cfg, num_samples=500, num_steps=100)
 ```
 
-From @fig-flow-animation and @fig-flow-path, we can see that the generated points follow closely the target distribution.
-We can also observe that the learned marginal velocity field does not always produce straight paths. This is a reasonable limitation of the original flow matching framework, as the learning signal comes only from random pairs of source and target samples. These random pairs produce crossing paths as in @fig-fm-widget, and you can think of the learned velocity field as the average direction of the paths crossing at a certain location. Several works [@liu2023flow;@pooladian2023multisample;@tongimproving] improve upon the original flow matching framework by learning straighter velocity fields, resulting in higher generation quality in fewer sampling steps.
+From @fig-flow-animation and @fig-flow-path, we can see that the generated points closely follow the target distribution.
+We can also observe that the learned marginal velocity field does not always produce straight paths. This is a reasonable limitation of the original flow matching framework, as the learning signal comes only from random pairs of source and target samples. These random pairs produce crossing paths as in @fig-fm-widget, and you can think of the learned velocity field as the average direction of the paths crossing at a specific location. Several works [@liu2023flow;@pooladian2023multisample;@tongimproving] improve upon the original flow matching framework by learning straighter velocity fields, resulting in higher generation quality in fewer sampling steps.
 
 # Conclusion
-Flow matching offers a simple and intuitive way to learn generative models without needing to simulate expensive ODEs.
-By turning the problem into a simple conditional regression task, we are able to scale flow models to high-dimensional complex datasets. In a next post, I want to write about **discrete flow matching**, which forms the backbone of the recently hot diffusion language models.
+Flow matching offers an elegant and intuitive approach to training generative models without needing
+to simulate expensive ODEs. By turning the problem into a simple conditional regression task, we are able to scale flow models
+to high-dimensional complex datasets of different modalities. In a subsequent post, I want to write about
+**discrete flow matching**, which transfers the idea of flow matching to the discrete domain and forms the backbone
+of the recently hot diffusion language models.
